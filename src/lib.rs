@@ -70,7 +70,7 @@ const SLOT_SIZE: usize = 16384;
 
 /// This is a Redis cluster client.
 pub struct Client {
-    initial_nodes: Vec<ConnectionInfo>,
+    initial_nodes: HashMap<String, ConnectionInfo>,
 }
 
 impl Client {
@@ -81,15 +81,22 @@ impl Client {
     ///
     /// If it is failed to parse initial_nodes, an error is returned.
     pub fn open<T: IntoConnectionInfo>(initial_nodes: Vec<T>) -> RedisResult<Client> {
-        let mut nodes = Vec::with_capacity(initial_nodes.len());
+        let mut nodes = HashMap::with_capacity(initial_nodes.len());
 
         for info in initial_nodes {
             let info = info.into_connection_info()?;
+
+            let addr = match *info.addr {
+                ConnectionAddr::Tcp(ref host, port) => format!("redis://{}:{}", host, port),
+                _ => panic!("No reach."),
+            };
+
+
             if let ConnectionAddr::Unix(_) = *info.addr {
                 return Err(RedisError::from((ErrorKind::InvalidClientConfig,
                                              "This library cannot use unix socket because Redis's cluster command returns only cluster's IP and port.")));
             }
-            nodes.push(info);
+            nodes.insert(addr, info);
         }
 
         Ok(Client {
@@ -109,14 +116,14 @@ impl Client {
 
 /// This is a connection of Redis cluster.
 pub struct Connection {
-    initial_nodes: Vec<ConnectionInfo>,
+    initial_nodes: HashMap<String, ConnectionInfo>,
     connections: RefCell<HashMap<String, redis::Connection>>,
     slots: RefCell<HashMap<u16, String>>,
     auto_reconnect: RefCell<bool>,
 }
 
 impl Connection {
-    fn new(initial_nodes: Vec<ConnectionInfo>) -> RedisResult<Connection> {
+    fn new(initial_nodes: HashMap<String, ConnectionInfo>) -> RedisResult<Connection> {
         let connections = Self::create_initial_connections(&initial_nodes)?;
         let connection = Connection {
             initial_nodes,
@@ -174,11 +181,11 @@ impl Connection {
     }
 
     fn create_initial_connections(
-        initial_nodes: &Vec<ConnectionInfo>,
+        initial_nodes: &HashMap<String, ConnectionInfo>,
     ) -> RedisResult<HashMap<String, redis::Connection>> {
         let mut connections = HashMap::with_capacity(initial_nodes.len());
 
-        for info in initial_nodes.iter() {
+        for (_host,info) in initial_nodes.iter() {
             let addr = match *info.addr {
                 ConnectionAddr::Tcp(ref host, port) => format!("redis://{}:{}", host, port),
                 _ => panic!("No reach."),
@@ -209,6 +216,7 @@ impl Connection {
         *slots = {
             let mut new_slots = HashMap::with_capacity(slots.len());
             let mut rng = thread_rng();
+
             let samples = sample_iter(&mut rng, connections.values(), connections.len())
                 .ok()
                 .unwrap();
@@ -247,7 +255,7 @@ impl Connection {
                         }
                     }
 
-                    if let Ok(conn) = connect(addr.as_ref()) {
+                    if let Ok(conn) = connect(self.initial_nodes.get(addr).cloned().unwrap_or_else(|| addr.into_connection_info().unwrap())) {
                         if check_connection(&conn) {
                             new_connections.insert(addr.to_string(), conn);
                         }
@@ -273,7 +281,7 @@ impl Connection {
             }
 
             // Create new connection.
-            if let Ok(conn) = connect(addr.as_ref()) {
+            if let Ok(conn) = connect(self.initial_nodes.get(addr).cloned().unwrap_or_else(|| addr.into_connection_info().unwrap())) {
                 if check_connection(&conn) {
                     return (
                         addr.to_string(),
@@ -383,7 +391,7 @@ impl Commands for Connection {}
 
 impl Clone for Client {
     fn clone(&self) -> Client {
-        Client::open(self.initial_nodes.clone()).unwrap()
+        Client::open(self.initial_nodes.values().cloned().collect()).unwrap()
     }
 }
 
