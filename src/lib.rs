@@ -71,30 +71,32 @@ const SLOT_SIZE: usize = 16384;
 /// This is a Redis cluster client.
 pub struct Client {
     initial_nodes: Vec<ConnectionInfo>,
+    password: Option<String>,
 }
 
 impl Client {
     /// Connect to a redis cluster server and return a cluster client.
     /// This does not actually open a connection yet but it performs some basic checks on the URL.
+    /// The password of initial nodes must be the same all.
+    ///
+    /// # Errors
+    ///
+    /// If it is failed to parse initial_nodes or the initial nodes has different password, an error is returned.
+    pub fn open<T: IntoConnectionInfo>(initial_nodes: Vec<T>) -> RedisResult<Client> {
+        Self::open_internal(initial_nodes, None)
+    }
+
+    /// Connect to a redis cluster server with authentication and return a cluster client.
+    /// This does not actually open a connection yet but it performs some basic checks on the URL.
+    ///
+    /// Redis cluster's password must be the same all.
+    /// This function is not use the password of initial nodes.
     ///
     /// # Errors
     ///
     /// If it is failed to parse initial_nodes, an error is returned.
-    pub fn open<T: IntoConnectionInfo>(initial_nodes: Vec<T>) -> RedisResult<Client> {
-        let mut nodes = Vec::with_capacity(initial_nodes.len());
-
-        for info in initial_nodes {
-            let info = info.into_connection_info()?;
-            if let ConnectionAddr::Unix(_) = *info.addr {
-                return Err(RedisError::from((ErrorKind::InvalidClientConfig,
-                                             "This library cannot use unix socket because Redis's cluster command returns only cluster's IP and port.")));
-            }
-            nodes.push(info);
-        }
-
-        Ok(Client {
-            initial_nodes: nodes,
-        })
+    pub fn open_with_auth<T: IntoConnectionInfo>(initial_nodes: Vec<T>, password: String) -> RedisResult<Client> {
+        Self::open_internal(initial_nodes, Some(password))
     }
 
     /// Open and get a Redis cluster connection.
@@ -103,7 +105,36 @@ impl Client {
     ///
     /// If it is failed to open connections and to create slots, an error is returned.
     pub fn get_connection(&self) -> RedisResult<Connection> {
-        Connection::new(self.initial_nodes.clone())
+        Connection::new(self.initial_nodes.clone(), self.password.clone())
+    }
+
+    fn open_internal<T: IntoConnectionInfo>(initial_nodes: Vec<T>, password: Option<String>) -> RedisResult<Client> {
+        let mut nodes = Vec::with_capacity(initial_nodes.len());
+        let mut connection_info_password = None::<String>;
+
+        for (index, info) in initial_nodes.into_iter().enumerate() {
+            let info = info.into_connection_info()?;
+            if let ConnectionAddr::Unix(_) = *info.addr {
+                return Err(RedisError::from((ErrorKind::InvalidClientConfig,
+                                             "This library cannot use unix socket because Redis's cluster command returns only cluster's IP and port.")));
+            }
+
+            if password.is_none() {
+                if index == 0 {
+                    connection_info_password = info.passwd.clone();
+                } else if connection_info_password != info.passwd {
+                    return Err(RedisError::from((ErrorKind::InvalidClientConfig,
+                                                "Cannot use different password among initial nodes.")));
+                }
+            }
+
+            nodes.push(info);
+        }
+
+        Ok(Client {
+            initial_nodes: nodes,
+            password: password.or(connection_info_password),
+        })
     }
 }
 
@@ -113,16 +144,18 @@ pub struct Connection {
     connections: RefCell<HashMap<String, redis::Connection>>,
     slots: RefCell<HashMap<u16, String>>,
     auto_reconnect: RefCell<bool>,
+    password: Option<String>,
 }
 
 impl Connection {
-    fn new(initial_nodes: Vec<ConnectionInfo>) -> RedisResult<Connection> {
-        let connections = Self::create_initial_connections(&initial_nodes)?;
+    fn new(initial_nodes: Vec<ConnectionInfo>, password: Option<String>) -> RedisResult<Connection> {
+        let connections = Self::create_initial_connections(&initial_nodes, password.clone())?;
         let connection = Connection {
             initial_nodes,
             connections: RefCell::new(connections),
             slots: RefCell::new(HashMap::with_capacity(SLOT_SIZE)),
             auto_reconnect: RefCell::new(true),
+            password,
         };
         connection.refresh_slots()?;
 
@@ -175,6 +208,7 @@ impl Connection {
 
     fn create_initial_connections(
         initial_nodes: &Vec<ConnectionInfo>,
+        password: Option<String>,
     ) -> RedisResult<HashMap<String, redis::Connection>> {
         let mut connections = HashMap::with_capacity(initial_nodes.len());
 
@@ -184,7 +218,7 @@ impl Connection {
                 _ => panic!("No reach."),
             };
 
-            if let Ok(conn) = connect(info.clone()) {
+            if let Ok(conn) = connect(info.clone(), password.clone()) {
                 if check_connection(&conn) {
                     connections.insert(addr, conn);
                     break;
@@ -247,7 +281,7 @@ impl Connection {
                         }
                     }
 
-                    if let Ok(conn) = connect(addr.as_ref()) {
+                    if let Ok(conn) = connect(addr.as_ref(), self.password.clone()) {
                         if check_connection(&conn) {
                             new_connections.insert(addr.to_string(), conn);
                         }
@@ -273,7 +307,7 @@ impl Connection {
             }
 
             // Create new connection.
-            if let Ok(conn) = connect(addr.as_ref()) {
+            if let Ok(conn) = connect(addr.as_ref(), self.password.clone()) {
                 if check_connection(&conn) {
                     return (
                         addr.to_string(),
@@ -336,7 +370,7 @@ impl Connection {
                     {
                         // Reconnect when ResponseError is occurred.
                         let new_connections =
-                            Self::create_initial_connections(&self.initial_nodes)?;
+                            Self::create_initial_connections(&self.initial_nodes, self.password.clone())?;
                         {
                             let mut connections = self.connections.borrow_mut();
                             *connections = new_connections;
@@ -387,8 +421,9 @@ impl Clone for Client {
     }
 }
 
-fn connect<T: IntoConnectionInfo>(info: T) -> RedisResult<redis::Connection> {
-    let connection_info = info.into_connection_info()?;
+fn connect<T: IntoConnectionInfo>(info: T, password: Option<String>) -> RedisResult<redis::Connection> {
+    let mut connection_info = info.into_connection_info()?;
+    connection_info.passwd = password;
     let client = redis::Client::open(connection_info)?;
     client.get_connection()
 }
@@ -536,4 +571,50 @@ fn get_slots(connection: &redis::Connection) -> RedisResult<Vec<Slot>> {
     }
 
     Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Client;
+    use redis::{IntoConnectionInfo, ConnectionInfo};
+
+    fn get_connection_data() -> Vec<ConnectionInfo> {
+        vec![
+            "redis://127.0.0.1:6379".into_connection_info().unwrap(),
+            "redis://127.0.0.1:6378".into_connection_info().unwrap(),
+            "redis://127.0.0.1:6377".into_connection_info().unwrap()
+        ]
+    }
+
+    fn get_connection_data_with_password() -> Vec<ConnectionInfo> {
+        vec![
+            "redis://:password@127.0.0.1:6379".into_connection_info().unwrap(),
+            "redis://:password@127.0.0.1:6378".into_connection_info().unwrap(),
+            "redis://:password@127.0.0.1:6377".into_connection_info().unwrap()
+        ]
+    }
+
+    #[test]
+    fn give_no_password() {
+        let client = Client::open(get_connection_data()).unwrap();
+        assert_eq!(client.password, None);
+    }
+
+    #[test]
+    fn give_password_by_initial_nodes() {
+        let client = Client::open(get_connection_data_with_password()).unwrap();
+        assert_eq!(client.password, Some("password".to_string()));
+    }
+
+    #[test]
+    fn give_different_password_by_initial_nodes() {
+        let result = Client::open(vec!["redis://:password1@127.0.0.1:6379", "redis://:password2@127.0.0.1:6378", "redis://:password3@127.0.0.1:6377"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn give_password_by_method() {
+        let client = Client::open_with_auth(get_connection_data_with_password(), "pass".to_string()).unwrap();
+        assert_eq!(client.password, Some("pass".to_string()));
+    }
 }
