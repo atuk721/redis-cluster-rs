@@ -12,4 +12,4 @@ readme = "README.md"
 [dependencies]
 crc16 = "0.4"
 rand = "0.5"
-redis = "0.9"
+redis = "0.10"
