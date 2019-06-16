@@ -1,2 +1,7 @@
-target
-Cargo.lock
+# Rust
+/target/
+/Cargo.lock
+**/*.rs.bk
+
+# IDE
+/.idea/

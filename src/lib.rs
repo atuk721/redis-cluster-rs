@@ -218,7 +218,7 @@ impl Connection {
     }
 
     fn create_initial_connections(
-        initial_nodes: &Vec<ConnectionInfo>,
+        initial_nodes: &[ConnectionInfo],
         password: Option<String>,
     ) -> RedisResult<HashMap<String, redis::Connection>> {
         let mut connections = HashMap::with_capacity(initial_nodes.len());
@@ -237,7 +237,7 @@ impl Connection {
             }
         }
 
-        if connections.len() == 0 {
+        if connections.is_empty() {
             return Err(RedisError::from((
                 ErrorKind::IoError,
                 "It is failed to check startup nodes.",
@@ -261,7 +261,7 @@ impl Connection {
             for conn in samples {
                 if let Ok(slots_data) = get_slots(&conn) {
                     for slot_data in slots_data {
-                        for slot in slot_data.start()..slot_data.end() + 1 {
+                        for slot in slot_data.start()..=slot_data.end() {
                             new_slots.insert(slot, slot_data.master().to_string());
                         }
                     }
@@ -344,7 +344,7 @@ impl Connection {
             // Get target address and response.
             let (addr, res) = {
                 let mut connections = self.connections.borrow_mut();
-                let (addr, conn) = if excludes.len() > 0 || slot.is_none() {
+                let (addr, conn) = if !excludes.is_empty() || slot.is_none() {
                     get_random_connection(&*connections, Some(&excludes))
                 } else {
                     self.get_connection(&mut *connections, slot.unwrap())
@@ -357,7 +357,7 @@ impl Connection {
                 Ok(res) => return Ok(res),
                 Err(err) => {
                     retries -= 1;
-                    if retries <= 0 {
+                    if retries == 0 {
                         return Err(err);
                     }
 
@@ -447,10 +447,7 @@ fn connect<T: IntoConnectionInfo>(
 fn check_connection(conn: &redis::Connection) -> bool {
     let mut cmd = Cmd::new();
     cmd.arg("PING");
-    match cmd.query::<String>(conn) {
-        Ok(_) => true,
-        Err(_) => false,
-    }
+    cmd.query::<String>(conn).is_ok()
 }
 
 fn get_random_connection<'a>(
@@ -473,7 +470,32 @@ fn get_random_connection<'a>(
 fn slot_for_packed_command(cmd: &[u8]) -> Option<u16> {
     let args = unpack_command(cmd);
     if args.len() > 1 {
-        Some(State::<XMODEM>::calculate(&args[1]) % SLOT_SIZE as u16)
+        let key = match get_hashtag(&args[1]) {
+            Some(tag) => tag,
+            None => &args[1],
+        };
+        println!("{:?}", String::from_utf8_lossy(key));
+        Some(State::<XMODEM>::calculate(key) % SLOT_SIZE as u16)
+    } else {
+        None
+    }
+}
+
+fn get_hashtag(key: &[u8]) -> Option<&[u8]> {
+    let open = key.iter().position(|v| *v == b'{');
+    let open = match open {
+        Some(open) => open,
+        None => return None,
+    };
+
+    let close = key[open..].iter().position(|v| *v == b'}');
+    let close = match close {
+        Some(close) => close,
+        None => return None,
+    };
+
+    if close - open > 1 {
+        Some(&key[open + 1..close])
     } else {
         None
     }
@@ -485,7 +507,7 @@ fn unpack_command(cmd: &[u8]) -> Vec<Vec<u8>> {
     let cursor = Cursor::new(cmd);
     for line in cursor.lines() {
         if let Ok(line) = line {
-            if !line.starts_with("*") && !line.starts_with("$") {
+            if !line.starts_with('*') && !line.starts_with('$') {
                 args.push(line.into_bytes());
             }
         }
@@ -573,7 +595,7 @@ fn get_slots(connection: &redis::Connection) -> RedisResult<Vec<Slot>> {
                 })
                 .collect();
 
-            if nodes.len() < 1 {
+            if nodes.is_empty() {
                 continue;
             }
 
