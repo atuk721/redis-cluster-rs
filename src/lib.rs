@@ -474,7 +474,6 @@ fn slot_for_packed_command(cmd: &[u8]) -> Option<u16> {
             Some(tag) => tag,
             None => &args[1],
         };
-        println!("{:?}", String::from_utf8_lossy(key));
         Some(State::<XMODEM>::calculate(key) % SLOT_SIZE as u16)
     } else {
         None
