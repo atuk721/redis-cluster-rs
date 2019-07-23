@@ -108,8 +108,8 @@ impl<T: IntoConnectionInfo> Builder<T> {
     /// Default is not read only mode.
     /// When it is set to readonly mode, all query use replica nodes except there are no replica nodes.
     /// If there are no replica nodes, it use master node.
-    pub fn readonly(mut self) -> Builder<T> {
-        self.readonly = true;
+    pub fn readonly(mut self, readonly: bool) -> Builder<T> {
+        self.readonly = readonly;
         return self;
     }
 }
@@ -163,10 +163,6 @@ impl Client {
         )
     }
 
-    //fn open_internal<T: IntoConnectionInfo>(
-    //    initial_nodes: Vec<T>,
-    //    password: Option<String>,
-    //) -> RedisResult<Client> {
     fn open_internal<T: IntoConnectionInfo>(builder: Builder<T>) -> RedisResult<Client> {
         let mut nodes = Vec::with_capacity(builder.initial_nodes.len());
         let mut connection_info_password = None::<String>;
