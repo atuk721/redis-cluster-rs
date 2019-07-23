@@ -2,7 +2,7 @@
 
 This is a Rust implementation for Redis cluster library.
 
-Documentation is available at [here](https://docs.rs/redis_cluster_rs/0.1.6/redis_cluster_rs/).
+Documentation is available at [here](https://docs.rs/redis_cluster_rs/0.1.8/redis_cluster_rs/).
 
 This library extends redis-rs library to be able to use cluster.
 Client impletemts traits of ConnectionLike and Commands.
@@ -21,7 +21,7 @@ use redis_cluster_rs::{Client, Commands};
 fn main() {
     let nodes = vec!["redis://127.0.0.1:6379/", "redis://127.0.0.1:6378/", "redis://127.0.0.1:6377/"];
     let client = Client::open(nodes).unwrap();
-    let connection = client.get_connection().unwrap();
+    let mut connection = client.get_connection().unwrap();
 
     let _: () = connection.set("test", "test_data").unwrap();
     let res: String = connection.get("test").unwrap();
@@ -40,7 +40,7 @@ use redis_cluster_rs::{Client, PipelineCommands, pipe};
 fn main() {
     let nodes = vec!["redis://127.0.0.1:6379/", "redis://127.0.0.1:6378/", "redis://127.0.0.1:6377/"];
     let client = Client::open(nodes).unwrap();
-    let connection = client.get_connection().unwrap();
+    let mut connection = client.get_connection().unwrap();
 
     let key = "test";
 
@@ -48,6 +48,6 @@ fn main() {
         .rpush(key, "123").ignore()
         .ltrim(key, -10, -1).ignore()
         .expire(key, 60).ignore()
-        .query(&connection).unwrap();
+        .query(&mut connection).unwrap();
 }
 ```
