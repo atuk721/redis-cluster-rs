@@ -45,6 +45,8 @@
 //!         .query(&mut connection).unwrap();
 //! }
 //! ```
+#[macro_use]
+extern crate log;
 extern crate crc16;
 extern crate rand;
 
@@ -512,8 +514,12 @@ fn connect<T: IntoConnectionInfo>(
     info: T,
     readonly: bool,
     password: Option<String>,
-) -> RedisResult<redis::Connection> {
+) -> RedisResult<redis::Connection>
+where
+    T: std::fmt::Debug,
+{
     let mut connection_info = info.into_connection_info()?;
+    info!("Checking connection of {:?}", connection_info);
     connection_info.passwd = password;
     let client = redis::Client::open(connection_info)?;
 
@@ -663,12 +669,16 @@ fn get_slots(connection: &mut redis::Connection) -> RedisResult<Vec<Slot>> {
                         } else {
                             return None;
                         };
+                        if ip.is_empty() {
+                            return None;
+                        }
 
                         let port = if let Value::Int(port) = node[1] {
                             port
                         } else {
                             return None;
                         };
+                        info!("Parsed host:port slot {}:{}", ip, port);
                         Some(format!("redis://{}:{}", ip, port))
                     } else {
                         None
@@ -686,9 +696,12 @@ fn get_slots(connection: &mut redis::Connection) -> RedisResult<Vec<Slot>> {
                 end,
                 master: nodes.pop().unwrap(),
                 replicas,
-            });;
+            });
+            info!("Added slot {:?}", result.last());
         }
     }
+
+    info!("Slots: {:?}", result);
 
     Ok(result)
 }
