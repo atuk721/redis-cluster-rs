@@ -77,6 +77,8 @@ pub struct Builder<T: IntoConnectionInfo> {
     initial_nodes: Vec<T>,
     readonly: bool,
     password: Option<String>,
+    read_timeout: Option<Duration>,
+    write_timeout: Option<Duration>,
 }
 
 impl<T: IntoConnectionInfo> Builder<T> {
@@ -86,6 +88,8 @@ impl<T: IntoConnectionInfo> Builder<T> {
             initial_nodes: initial_nodes,
             readonly: false,
             password: None,
+            read_timeout: None,
+            write_timeout: None,
         }
     }
 
@@ -114,6 +118,26 @@ impl<T: IntoConnectionInfo> Builder<T> {
         self.readonly = readonly;
         return self;
     }
+
+    /// Set the read timeout for the connection.
+    ///
+    /// If the provided value is `None`, then `recv_response` call will
+    /// block indefinitely. It is an error to pass the zero `Duration` to this
+    /// method.
+    pub fn read_timeout(mut self, timeout: Option<Duration>) -> Builder<T> {
+        self.read_timeout = timeout;
+        return self;
+    }
+
+    /// Set the write timeout for the connection.
+    ///
+    /// If the provided value is `None`, then `send_packed_command` call will
+    /// block indefinitely. It is an error to pass the zero `Duration` to this
+    /// method.
+    pub fn write_timeout(mut self, timeout: Option<Duration>) -> Builder<T> {
+        self.write_timeout = timeout;
+        return self;
+    }
 }
 
 /// This is a Redis cluster client.
@@ -121,6 +145,8 @@ pub struct Client {
     initial_nodes: Vec<ConnectionInfo>,
     readonly: bool,
     password: Option<String>,
+    read_timeout: Option<Duration>,
+    write_timeout: Option<Duration>,
 }
 
 impl Client {
@@ -162,6 +188,8 @@ impl Client {
             self.initial_nodes.clone(),
             self.readonly,
             self.password.clone(),
+            self.read_timeout.clone(),
+            self.write_timeout.clone(),
         )
     }
 
@@ -194,6 +222,8 @@ impl Client {
             initial_nodes: nodes,
             readonly: builder.readonly,
             password: builder.password.or(connection_info_password),
+            read_timeout: builder.read_timeout,
+            write_timeout: builder.write_timeout,
         })
     }
 }
@@ -206,6 +236,8 @@ pub struct Connection {
     auto_reconnect: RefCell<bool>,
     readonly: bool,
     password: Option<String>,
+    read_timeout: Option<Duration>,
+    write_timeout: Option<Duration>,
 }
 
 impl Connection {
@@ -213,9 +245,16 @@ impl Connection {
         initial_nodes: Vec<ConnectionInfo>,
         readonly: bool,
         password: Option<String>,
+        read_timeout: Option<Duration>,
+        write_timeout: Option<Duration>,
     ) -> RedisResult<Connection> {
-        let connections =
-            Self::create_initial_connections(&initial_nodes, readonly, password.clone())?;
+        let connections = Self::create_initial_connections(
+            &initial_nodes,
+            readonly,
+            password.clone(),
+            read_timeout.clone(),
+            write_timeout.clone(),
+        )?;
         let connection = Connection {
             initial_nodes,
             connections: RefCell::new(connections),
@@ -223,6 +262,8 @@ impl Connection {
             auto_reconnect: RefCell::new(true),
             readonly,
             password,
+            read_timeout,
+            write_timeout,
         };
         connection.refresh_slots()?;
 
@@ -236,11 +277,12 @@ impl Connection {
         *auto_reconnect = value;
     }
 
-    /// Sets the write timeout for the connection.
+    /// Set the write timeout for the connection.
     ///
     /// If the provided value is `None`, then `send_packed_command` call will
     /// block indefinitely. It is an error to pass the zero `Duration` to this
     /// method.
+    #[deprecated(note = "Please use the Builder function instead")]
     pub fn set_write_timeout(&self, dur: Option<Duration>) -> RedisResult<()> {
         let connections = self.connections.borrow();
         for conn in connections.values() {
@@ -249,11 +291,12 @@ impl Connection {
         Ok(())
     }
 
-    /// Sets the read timeout for the connection.
+    /// Set the read timeout for the connection.
     ///
     /// If the provided value is `None`, then `recv_response` call will
     /// block indefinitely. It is an error to pass the zero `Duration` to this
     /// method.
+    #[deprecated(note = "Please use the Builder function instead")]
     pub fn set_read_timeout(&self, dur: Option<Duration>) -> RedisResult<()> {
         let connections = self.connections.borrow();
         for conn in connections.values() {
@@ -277,6 +320,8 @@ impl Connection {
         initial_nodes: &[ConnectionInfo],
         readonly: bool,
         password: Option<String>,
+        read_timeout: Option<Duration>,
+        write_timeout: Option<Duration>,
     ) -> RedisResult<HashMap<String, redis::Connection>> {
         let mut connections = HashMap::with_capacity(initial_nodes.len());
 
@@ -286,7 +331,13 @@ impl Connection {
                 _ => panic!("No reach."),
             };
 
-            if let Ok(mut conn) = connect(info.clone(), readonly, password.clone()) {
+            if let Ok(mut conn) = connect(
+                info.clone(),
+                readonly,
+                password.clone(),
+                read_timeout.clone(),
+                write_timeout.clone(),
+            ) {
                 if check_connection(&mut conn) {
                     connections.insert(addr, conn);
                     break;
@@ -345,9 +396,13 @@ impl Connection {
                         }
                     }
 
-                    if let Ok(mut conn) =
-                        connect(addr.as_ref(), self.readonly, self.password.clone())
-                    {
+                    if let Ok(mut conn) = connect(
+                        addr.as_ref(),
+                        self.readonly,
+                        self.password.clone(),
+                        self.read_timeout.clone(),
+                        self.write_timeout.clone(),
+                    ) {
                         if check_connection(&mut conn) {
                             new_connections.insert(addr.to_string(), conn);
                         }
@@ -396,7 +451,13 @@ impl Connection {
             }
 
             // Create new connection.
-            if let Ok(mut conn) = connect(addr.as_ref(), self.readonly, self.password.clone()) {
+            if let Ok(mut conn) = connect(
+                addr.as_ref(),
+                self.readonly,
+                self.password.clone(),
+                self.read_timeout.clone(),
+                self.write_timeout.clone(),
+            ) {
                 if check_connection(&mut conn) {
                     return (
                         addr.to_string(),
@@ -461,6 +522,8 @@ impl Connection {
                             &self.initial_nodes,
                             self.readonly,
                             self.password.clone(),
+                            self.read_timeout.clone(),
+                            self.write_timeout.clone(),
                         )?;
                         {
                             let mut connections = self.connections.borrow_mut();
@@ -514,6 +577,8 @@ fn connect<T: IntoConnectionInfo>(
     info: T,
     readonly: bool,
     password: Option<String>,
+    read_timeout: Option<Duration>,
+    write_timeout: Option<Duration>,
 ) -> RedisResult<redis::Connection>
 where
     T: std::fmt::Debug,
@@ -527,6 +592,8 @@ where
     if readonly {
         cmd("READONLY").query(&mut con)?;
     }
+    con.set_read_timeout(read_timeout)?;
+    con.set_write_timeout(write_timeout)?;
     Ok(con)
 }
 
