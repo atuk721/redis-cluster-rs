@@ -68,7 +68,7 @@ use redis::{
     cmd, Cmd, ConnectionAddr, ConnectionInfo, ErrorKind, IntoConnectionInfo, RedisError, Value,
 };
 
-pub use redis::{pipe, Commands, ConnectionLike, PipelineCommands, RedisResult};
+pub use redis::{pipe, Commands, ConnectionLike, RedisResult};
 
 const SLOT_SIZE: usize = 16384;
 
@@ -199,15 +199,15 @@ impl Client {
 
         for (index, info) in builder.initial_nodes.into_iter().enumerate() {
             let info = info.into_connection_info()?;
-            if let ConnectionAddr::Unix(_) = *info.addr {
+            if let ConnectionAddr::Unix(_) = info.addr {
                 return Err(RedisError::from((ErrorKind::InvalidClientConfig,
                                              "This library cannot use unix socket because Redis's cluster command returns only cluster's IP and port.")));
             }
 
             if builder.password.is_none() {
                 if index == 0 {
-                    connection_info_password = info.passwd.clone();
-                } else if connection_info_password != info.passwd {
+                    connection_info_password = info.redis.password.clone();
+                } else if connection_info_password != info.redis.password {
                     return Err(RedisError::from((
                         ErrorKind::InvalidClientConfig,
                         "Cannot use different password among initial nodes.",
@@ -313,6 +313,7 @@ impl Connection {
                 return false;
             }
         }
+        
         true
     }
 
@@ -326,7 +327,7 @@ impl Connection {
         let mut connections = HashMap::with_capacity(initial_nodes.len());
 
         for info in initial_nodes.iter() {
-            let addr = match *info.addr {
+            let addr = match info.addr {
                 ConnectionAddr::Tcp(ref host, port) => format!("redis://{}:{}", host, port),
                 _ => panic!("No reach."),
             };
@@ -500,7 +501,7 @@ impl Connection {
                     }
 
                     if err.kind() == ErrorKind::ExtensionError {
-                        let error_code = err.extension_error_code().unwrap();
+                        let error_code = err.code().unwrap();
 
                         if error_code == "MOVED" || error_code == "ASK" {
                             // Refresh slots and request again.
@@ -565,6 +566,14 @@ impl ConnectionLike for Connection {
     fn get_db(&self) -> i64 {
         0
     }
+
+    fn check_connection(&mut self) -> bool {
+        self.check_connection()
+    }
+
+    fn is_open(&self) -> bool {
+        true
+    }
 }
 
 impl Clone for Client {
@@ -585,7 +594,7 @@ where
 {
     let mut connection_info = info.into_connection_info()?;
     info!("Checking connection of {:?}", connection_info);
-    connection_info.passwd = password;
+    connection_info.redis.password = password;
     let client = redis::Client::open(connection_info)?;
 
     let mut con = client.get_connection()?;

@@ -12,5 +12,6 @@ readme = "README.md"
 [dependencies]
 crc16 = "0.4"
 rand = "0.7"
-redis = "0.11"
 log = "0.4"
+# redis = "0.11"
+redis = "0.23.3"
