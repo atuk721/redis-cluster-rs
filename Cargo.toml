@@ -1,11 +1,11 @@
 [package]
-name = "redis_cluster_rs"
-version = "0.1.10"
-authors = ["Atsushi Koge <atuk721@gmail.com>", "hedgar2017 <hedgar2017@gmail.com>"]
+name = "redis_cluster_rs2"
+version = "0.23.3"
+authors = ["keesh.zhang<chunhui2001@gmail.com>"]
 keywords = ["redis", "cluster", "database"]
 description = "Redis cluster driver for Rust."
-homepage = "https://github.com/atuk721/redis-cluster-rs"
-repository = "https://github.com/atuk721/redis-cluster-rs"
+homepage = "https://github.com/chunhui2001/redis_cluster_rs"
+repository = "https://github.com/chunhui2001/redis_cluster_rs"
 license = "MIT"
 readme = "README.md"
 
